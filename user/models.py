@@ -27,10 +27,13 @@ class MyUserManager(BaseUserManager):
 
 
 class MyUser(AbstractBaseUser):
-    username = models.CharField(max_length=100, unique=True)
+    username = models.CharField(max_length=100,)
     email = models.EmailField(max_length=100, unique=True)
     password = models.CharField(max_length=100)
     registered_at = models.DateTimeField(auto_now_add=True)
+
+    user_otp = models.CharField(max_length=6, null=True, blank=True)
+    user_otp_created_at = models.DateTimeField(blank=True, null=True)
 
 
     is_admin = models.BooleanField(default=False)
@@ -52,3 +55,10 @@ class MyUser(AbstractBaseUser):
     @property
     def is_staff(self):
         return self.is_admin
+
+
+class TemporaryUser(models.Model):
+    username = models.CharField(max_length=100,)
+    email = models.EmailField(max_length=100, unique=True)
+    password = models.CharField(max_length=100)
+    registered_at = models.DateTimeField(auto_now_add=True)
