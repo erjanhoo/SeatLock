@@ -4,6 +4,7 @@ from rest_framework.response import Response
 
 from django.db import transaction
 from django.utils import timezone
+from django.contrib.auth.hashers import make_password
 
 from .serializers import (
     UserRegistrationSerializer,
@@ -32,11 +33,11 @@ class UserRegistrationView(APIView):
 
             with transaction.atomic():
                 otp_code = generate_otp_code()
-
+                password = make_password(serializer.validated_data['password'])
                 tempUser = TemporaryUser.objects.create(
                     username=serializer.validated_data['username'],
                     email=serializer.validated_data['email'],
-                    password=serializer.validated_data['password'],
+                    password=password,
                     user_otp=otp_code,
                     user_otp_created_at=timezone.now()
                 )
@@ -45,7 +46,7 @@ class UserRegistrationView(APIView):
                 return Response(
                     {'message': 'The code was sent to your email, please confirm it to finish registration',
                      'user_id':tempUser.id
-                    }, status=status.OK
+                    }, status=status.HTTP_200_OK
                 )
             
                 

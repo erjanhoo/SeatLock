@@ -1,10 +1,10 @@
-from random import random
-from django.core.mail import send_mail
+from random import randint
+
 
 
 def generate_otp_code():
-    otp = random(100000, 999999)
-    return otp
+    otp = randint(100000, 999999)
+    return str(otp)
 
 
 def check_otp_code(entered_otp, user_otp):

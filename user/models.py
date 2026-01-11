@@ -62,3 +62,7 @@ class TemporaryUser(models.Model):
     email = models.EmailField(max_length=100, unique=True)
     password = models.CharField(max_length=100)
     registered_at = models.DateTimeField(auto_now_add=True)
+
+
+    user_otp = models.CharField(max_length=6, null=True, blank=True)
+    user_otp_created_at = models.DateTimeField(blank=True, null=True)
