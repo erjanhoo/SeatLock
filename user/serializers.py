@@ -27,3 +27,14 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         user.save()
 
         return user
+    
+
+class UserOTPVerificationSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
+    enterd_otp_code = serializers.CharField(max_length=6)
+
+
+class UserLoginSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ('username', 'email', 'password')
