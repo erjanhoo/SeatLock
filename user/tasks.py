@@ -14,6 +14,7 @@ def send_otp_code(otp_code, user_email):
         fail_silently=False,
     )
 
+
 @shared_task
 def send_email(user_email, message):
     send_mail(

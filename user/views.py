@@ -9,12 +9,12 @@ from django.db import transaction
 from django.utils import timezone
 from django.utils import time
 from django.contrib.auth.hashers import make_password
+from django.contrib.auth import authenticate
 
 from .serializers import (
     UserRegistrationSerializer,
     UserOTPVerificationSerializer,
-
-    UserLoginSerializer
+    UserLoginSerializer,
     )
 
 from .models import MyUser, TemporaryUser
@@ -115,14 +115,70 @@ class UserRegistrationOTPVerificationView(APIView):
             })
 
 
-
-
 class UserLoginView(APIView):
     def post(self, request):
         serializer = UserLoginSerializer(data=request.data)
-                      
-    
+
+        if serializer.is_valid(raise_exception=True):
+            user = authenticate(
+                request=request,
+                email=serializer.data['email'],
+                password=serializer.data['password']
+            )
+            return Response(
+                {'message' : 'Invalid username or password'}
+            )
             
-                
-                
+            
+        if user.is_2fa_enabled:
+
+            otp_code = generate_otp_code()
+            send_otp_code(otp_code, user.email)
+            user.user_otp = otp_code
+
+            return Response({
+                'message':'A one time code was sent to your email',
+                'user_id': user.id,
+            }, status=status.HTTP_200_OK)
         
+        else:
+            refresh = RefreshToken.for_user(user=user)
+            
+            return Response({
+                'refresh':refresh,
+                'access': refresh.access_token,
+                'message': 'You have successfully logged in'
+            })
+                
+                
+class UserLoginOTPVerificationView(APIView):
+    def post(self, request):
+        serializer = UserOTPVerificationSerializer(data=request.data)
+        if serializer.is_valid(raise_exception=True):
+            try:
+                user = User.objects.get(id=serializer.data['user_id'])
+            except User.DoesNotExist:
+                return Response({
+                    'message':'User not found'
+                }, status=status.HTTP_404_NOT_FOUND)
+            
+            if not user.otp_code == serializer.data['entered_otp_code']:
+                return Response({
+                    'message':'Incorrect code, try again'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            user_otp_created_at = user.otp_created_at
+            otp_expiry = 5
+
+            if (timezone.now() - user_otp_created_at).total_seconds() > (otp_expiry * 60):
+                return Response('OTP has expired, try again', status=status.HTTP_400_BAD_REQUEST)
+            
+            refresh = RefreshToken.for_user(user=user)
+
+            return Response({
+                'refresh_token':str(refresh),
+                'access_token':str(refresh.access_token),
+                'user_id':user.id,
+                'message':'Welcome Back!'
+            },status=status.HTTP_200_OK)
+        return Response('Invalid information provided')
