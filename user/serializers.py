@@ -1,40 +1,41 @@
 from rest_framework import serializers
-
 from django.contrib.auth import get_user_model
-
-from .models import MyUser
 
 User = get_user_model()
 
-class UserRegistrationSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = User
-        fields = ('email', 'password', 'username')
 
-    def validate_password(self, value):
-        if len(value) < 8:
-            raise serializers.ValidationError('Password must be atleast 8 characters long')
-        return value
-    
-    def validate_email(self, value):
-        if not '@' in value:
-            raise serializers.ValidationError('Enter valid email')
-        return value
-    
-    def create(self, validated_data):
-        user = User.objects.create(**validated_data)
-        user.set_password(validated_data['password'])
-        user.save()
+class UserRegistrationSerializer(serializers.Serializer):
+    last_name = serializers.CharField(max_length=100)
+    first_name = serializers.CharField(max_length=100)
+    patronymic = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    email = serializers.EmailField()
+    password = serializers.CharField(min_length=8, write_only=True)
+    password_confirm = serializers.CharField(min_length=8, write_only=True)
 
-        return user
-    
-
-class UserOTPVerificationSerializer(serializers.Serializer):
-    user_id = serializers.IntegerField()
-    enterd_otp_code = serializers.CharField(max_length=6)
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password_confirm']:
+            raise serializers.ValidationError({'password_confirm': 'Passwords do not match'})
+        return attrs
 
 
-class UserLoginSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = User
-        fields = ('username', 'email', 'password')
+class UserLoginSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+
+
+class UserProfileSerializer(serializers.Serializer):
+    last_name = serializers.CharField(max_length=100, required=False)
+    first_name = serializers.CharField(max_length=100, required=False)
+    patronymic = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    email = serializers.EmailField(required=False)
+
+    def to_representation(self, instance):
+        parts = (instance.last_name, instance.first_name, instance.patronymic)
+        full_name = " ".join([p for p in parts if p])
+        return {
+            'id': instance.id,
+            'email': instance.email,
+            'full_name': full_name or instance.username,
+            'is_active': instance.is_active,
+            'registered_at': instance.registered_at,
+        }

@@ -1,0 +1,56 @@
+Custom authentication + access control (simple explanation)
+
+1) Authentication
+
+- Registration creates a user with email + password.
+- Login returns an access token.
+- Next requests send the token in header:
+
+  Authorization: Token <token>
+
+- Logout just revokes that token in DB.
+
+Tokens are stored in the AccessToken table:
+- key (random string)
+- user_id
+- expires_at
+- revoked_at
+
+If the token is missing/invalid/expired/revoked -> 401 Unauthorized.
+
+
+2) Authorization (who can do what)
+
+I use a small RBAC schema:
+
+- Role: a user can have roles (user/admin)
+- Resource: named objects we protect (profile, admin_panel)
+- Action: operation types (read/create/update/delete)
+- RolePermission: allow rules for (role, resource, action)
+- UserRole: assigns roles to users
+
+Permission check:
+- map HTTP method -> action
+  GET    -> read
+  POST   -> create
+  PUT    -> update
+  PATCH  -> update
+  DELETE -> delete
+
+- view sets access_resource (and optionally access_action)
+- if user has a matching RolePermission -> allowed
+- otherwise -> 403 Forbidden
+
+
+3) Demo / how to see 401 vs 403
+
+- GET /api/user/admin-panel/
+  - no token -> 401
+  - token of normal user -> 403
+  - token of admin -> 200
+
+
+4) Seeded demo accounts
+
+- admin@example.local / Admin12345
+- user@example.local  / User12345

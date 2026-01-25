@@ -1,184 +1,151 @@
-from datetime import timedelta
+from django.contrib.auth import get_user_model
 
-from rest_framework.views import APIView
 from rest_framework import status
 from rest_framework.response import Response
-from rest_framework_simplejwt.tokens import RefreshToken
-
-from django.db import transaction
-from django.utils import timezone
-from django.utils import time
-from django.contrib.auth.hashers import make_password
-from django.contrib.auth import authenticate
+from rest_framework.views import APIView
 
 from .serializers import (
     UserRegistrationSerializer,
-    UserOTPVerificationSerializer,
     UserLoginSerializer,
-    )
-
-from .models import MyUser, TemporaryUser
-from .serivces import (
-    generate_otp_code,
-    check_otp_code
+    UserProfileSerializer,
 )
-from .tasks import (
-    send_otp_code,
-    send_email
-)
-
-from django.contrib.auth import get_user_model
+from .models import AccessToken, Role, UserRole
+from .authentication import TokenAuthentication
+from .permissions import AccessRulePermission
 
 User = get_user_model()
+
+
+def _build_username(last_name, first_name, patronymic):
+    result = []
+    for value in (last_name, first_name, patronymic):
+        if value:
+            result.append(value)
+    return " ".join(result).strip()
+
 
 class UserRegistrationView(APIView):
     def post(self, request):
         serializer = UserRegistrationSerializer(data=request.data)
-        if serializer.is_valid():
-            if MyUser.objects.filter(email=serializer.validated_data['email']).exists():
-                return Response(
-                    {'message':'Email already exists'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            if TemporaryUser.objects.filter(email=serializer.validated_data['email']).exists():
-                TemporaryUser.objects.filter(email=serializer.validated_data['email']).delete()
+        serializer.is_valid(raise_exception=True)
 
-            with transaction.atomic():
-                otp_code = generate_otp_code()
-                password = make_password(serializer.validated_data['password'])
-                
-                tempUser = TemporaryUser.objects.create(
-                    username=serializer.validated_data['username'],
-                    email=serializer.validated_data['email'],
-                    password=password,
-                    user_otp=otp_code,
-                    user_otp_created_at=timezone.now()
-                )
-                transaction.on_commit(lambda: send_otp_code.delay(tempUser.user_otp, tempUser.email))
+        email = serializer.validated_data['email']
+        if User.objects.filter(email=email).exists():
+            return Response({'message': 'Email already exists'}, status=status.HTTP_400_BAD_REQUEST)
 
-                return Response(
-                    {'message': 'The code was sent to your email, please confirm it to finish registration',
-                     'user_id':tempUser.id
-                    }, status=status.HTTP_200_OK
-                )
-            
+        username = _build_username(
+            serializer.validated_data['last_name'],
+            serializer.validated_data['first_name'],
+            serializer.validated_data.get('patronymic'),
+        )
 
-class UserRegistrationOTPVerificationView(APIView):
-    def post(self, request):
-        serializer = UserOTPVerificationSerializer(data=request.data)
+        user = User.objects.create_user(
+            username=username or email,
+            email=email,
+            password=serializer.validated_data['password'],
+            last_name=serializer.validated_data['last_name'],
+            first_name=serializer.validated_data['first_name'],
+            patronymic=serializer.validated_data.get('patronymic', ''),
+        )
 
-        if serializer.is_valid(raise_exception=True):
-            temp_reg_id = serializer.validated_data['user_id']
-            entered_otp_code = serializer.validated_data['entered_otp_code']
+        try:
+            default_role = Role.objects.get(code='user')
+            UserRole.objects.get_or_create(user=user, role=default_role)
+        except Role.DoesNotExist:
+            pass
 
-            if not TemporaryUser.objects.filter(id=temp_reg_id):
-                return Response(
-                    {'message':'Registration intent was not found'},
-                    status=status.HTTP_404_NOT_FOUND
-                    )
-            
-            otp_code_expiry = 5
-            current_time = timezone.now()
-            temp_reg_otp_created_at = temp_reg_id.user_otp_created_at
-            temp_reg_user = TemporaryUser.objects.get(id=temp_reg_id)
-
-            if (current_time - temp_reg_otp_created_at).total_seconds() > otp_code_expiry * 60:
-                return Response(
-                    {'message' : 'Code has expired, request a new one please'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            if check_otp_code(entered_otp_code, temp_reg_user.user_otp):
-                user = User(
-                    username=temp_reg_user.username,
-                    email=temp_reg_user.email
-                )
-                user.set_password(temp_reg_user.password)
-                user.save()
-
-                temp_reg_user.delete()
-
-                return Response(
-                    {'message' : 'You have successfully registered! '},
-                    status=status.HTTP_200_OK
-                )
-            
-            send_email.delay(user.email, f'You have succesffully registered! Welcome {user.username}')
-
-            refresh = RefreshToken.for_user(user=user)
-
-            return Response({
-                'refresh' : str(refresh),
-                'access' : str(refresh.access_token()),
-                'user_id' : user.id,
-                'message' : 'Welcome to SeatLock! '
-            })
+        return Response(
+            {'message': 'User registered', 'user_id': user.id},
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class UserLoginView(APIView):
     def post(self, request):
         serializer = UserLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
 
-        if serializer.is_valid(raise_exception=True):
-            user = authenticate(
-                request=request,
-                email=serializer.data['email'],
-                password=serializer.data['password']
-            )
-            return Response(
-                {'message' : 'Invalid username or password'}
-            )
-            
-            
-        if user.is_2fa_enabled:
+        try:
+            user = User.objects.get(email=serializer.validated_data['email'])
+        except User.DoesNotExist:
+            return Response({'message': 'Invalid email or password'}, status=status.HTTP_400_BAD_REQUEST)
 
-            otp_code = generate_otp_code()
-            send_otp_code(otp_code, user.email)
-            user.user_otp = otp_code
+        if not user.is_active or not user.check_password(serializer.validated_data['password']):
+            return Response({'message': 'Invalid email or password'}, status=status.HTTP_400_BAD_REQUEST)
 
-            return Response({
-                'message':'A one time code was sent to your email',
-                'user_id': user.id,
-            }, status=status.HTTP_200_OK)
-        
-        else:
-            refresh = RefreshToken.for_user(user=user)
-            
-            return Response({
-                'refresh':refresh,
-                'access': refresh.access_token,
-                'message': 'You have successfully logged in'
-            })
-                
-                
-class UserLoginOTPVerificationView(APIView):
+        token = AccessToken.create_for_user(user)
+        return Response(
+            {
+                'access_token': token.key,
+                'expires_at': token.expires_at,
+                'token_type': 'Token',
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class UserLogoutView(APIView):
+    authentication_classes = [TokenAuthentication]
+
     def post(self, request):
-        serializer = UserOTPVerificationSerializer(data=request.data)
-        if serializer.is_valid(raise_exception=True):
-            try:
-                user = User.objects.get(id=serializer.data['user_id'])
-            except User.DoesNotExist:
-                return Response({
-                    'message':'User not found'
-                }, status=status.HTTP_404_NOT_FOUND)
-            
-            if not user.otp_code == serializer.data['entered_otp_code']:
-                return Response({
-                    'message':'Incorrect code, try again'
-                }, status=status.HTTP_400_BAD_REQUEST)
-            
-            user_otp_created_at = user.otp_created_at
-            otp_expiry = 5
+        token = request.auth
+        if isinstance(token, AccessToken):
+            token.revoke()
+        return Response({'message': 'Logged out'}, status=status.HTTP_200_OK)
 
-            if (timezone.now() - user_otp_created_at).total_seconds() > (otp_expiry * 60):
-                return Response('OTP has expired, try again', status=status.HTTP_400_BAD_REQUEST)
-            
-            refresh = RefreshToken.for_user(user=user)
 
-            return Response({
-                'refresh_token':str(refresh),
-                'access_token':str(refresh.access_token),
-                'user_id':user.id,
-                'message':'Welcome Back!'
-            },status=status.HTTP_200_OK)
-        return Response('Invalid information provided')
+class UserProfileView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [AccessRulePermission]
+    access_resource = 'profile'
+
+    def get(self, request):
+        serializer = UserProfileSerializer(instance=request.user)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def put(self, request):
+        serializer = UserProfileSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+
+        if 'email' in serializer.validated_data:
+            if User.objects.filter(email=serializer.validated_data['email']).exclude(id=request.user.id).exists():
+                return Response({'message': 'Email already exists'}, status=status.HTTP_400_BAD_REQUEST)
+            request.user.email = serializer.validated_data['email']
+
+        if any(k in serializer.validated_data for k in ('last_name', 'first_name', 'patronymic')):
+            request.user.last_name = serializer.validated_data.get('last_name', request.user.last_name)
+            request.user.first_name = serializer.validated_data.get('first_name', request.user.first_name)
+            request.user.patronymic = serializer.validated_data.get('patronymic', request.user.patronymic)
+            request.user.username = _build_username(
+                request.user.last_name,
+                request.user.first_name,
+                request.user.patronymic,
+            ) or request.user.username
+
+        request.user.save()
+        return Response(UserProfileSerializer(instance=request.user).data, status=status.HTTP_200_OK)
+
+    def delete(self, request):
+        request.user.is_active = False
+        request.user.save(update_fields=['is_active'])
+
+        for token in request.user.access_tokens.filter(revoked_at__isnull=True):
+            token.revoke()
+
+        return Response({'message': 'Account deactivated'}, status=status.HTTP_200_OK)
+
+
+class AdminPanelView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [AccessRulePermission]
+    access_resource = 'admin_panel'
+    access_action = 'read'
+
+    def get(self, request):
+        return Response(
+            {
+                'message': 'If you see this, you are allowed here.',
+                'your_email': request.user.email,
+            },
+            status=status.HTTP_200_OK,
+        )
