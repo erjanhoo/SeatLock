@@ -1,56 +1,39 @@
-Custom authentication + access control (simple explanation)
+Собственная аутентификация и авторизация (кратко)
 
-1) Authentication
+1) Аутентификация
 
-- Registration creates a user with email + password.
-- Login returns an access token.
-- Next requests send the token in header:
+- Регистрация создаёт пользователя (ФИО, email, пароль).
+- Логин возвращает токен доступа.
+- Дальше токен передаётся в заголовке:
 
   Authorization: Token <token>
 
-- Logout just revokes that token in DB.
+- Logout делает токен недействительным (revoked).
 
-Tokens are stored in the AccessToken table:
-- key (random string)
-- user_id
-- expires_at
-- revoked_at
-
-If the token is missing/invalid/expired/revoked -> 401 Unauthorized.
+Если токена нет / он неверный / истёк / отозван → 401 Unauthorized.
 
 
-2) Authorization (who can do what)
+2) Авторизация (права доступа)
 
-I use a small RBAC schema:
+Минимальная RBAC-схема в БД:
+- Role (роль)
+- Resource (ресурс: например, profile, admin_panel)
+- Action (действие: read/create/update/delete)
+- UserRole (связь пользователь→роль)
+- RolePermission (разрешение роли на ресурс+действие)
 
-- Role: a user can have roles (user/admin)
-- Resource: named objects we protect (profile, admin_panel)
-- Action: operation types (read/create/update/delete)
-- RolePermission: allow rules for (role, resource, action)
-- UserRole: assigns roles to users
-
-Permission check:
-- map HTTP method -> action
-  GET    -> read
-  POST   -> create
-  PUT    -> update
-  PATCH  -> update
-  DELETE -> delete
-
-- view sets access_resource (and optionally access_action)
-- if user has a matching RolePermission -> allowed
-- otherwise -> 403 Forbidden
+Если пользователь залогинен, но права нет → 403 Forbidden.
 
 
-3) Demo / how to see 401 vs 403
+Проверка 401/403
 
-- GET /api/user/admin-panel/
-  - no token -> 401
-  - token of normal user -> 403
-  - token of admin -> 200
+GET /api/user/admin-panel/
+- без токена → 401
+- с токеном обычного пользователя → 403
+- с токеном админа → 200
 
 
-4) Seeded demo accounts
+Демо-аккаунты (сидируются миграцией)
 
 - admin@example.local / Admin12345
 - user@example.local  / User12345
